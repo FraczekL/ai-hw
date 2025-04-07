@@ -15,7 +15,7 @@ import kagglehub
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Using device: {device}")
 
-# Set path to the dataset and validate
+# Set path to the full dataset and validate
 path = kagglehub.dataset_download("navoneel/brain-mri-images-for-brain-tumor-detection")
 print("Path to dataset files:", path)
 
@@ -48,3 +48,32 @@ val_test_transform = transform.Compose([
     transform.Normalize(mean=normalize_mean, std=normalize_std)
 ])
 
+# Load the entire dataset and verify
+dataset = datasets.ImageFolder(path, transform=None)
+print(f"Dataset has {len(dataset)} images.")
+print(f"Dataset has {dataset.classes} classes.")
+
+# Divide the dataset into training, validation, and test subsets
+total_size = len(dataset)
+train_size = int(train_split * total_size)
+val_size = int(val_split * total_size)
+test_size = total_size - train_size - val_size
+print(f"train={train_size}, val={val_size}, test={test_size}")
+
+# Index the data subsets
+train_idx, val_idx, test_idx = random_split(range(total_size), [train_size, val_size, test_size])
+
+# Transform our data subsets
+class TransformDataset(torch.utils.data.Dataset):
+    def __init__(self, subset, transform):
+        self.subset = subset
+        self.transform = transform
+
+    def __getitem__(self, idx):
+        x, y = self.subset[idx]
+        x = self.transform(x)
+        return x, y
+
+    def __len__(self):
+        return len(self.subset)
+    
