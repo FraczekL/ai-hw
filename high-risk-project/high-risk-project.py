@@ -64,7 +64,7 @@ print(f"train={train_size}, val={val_size}, test={test_size}")
 train_idx, val_idx, test_idx = random_split(range(total_size), [train_size, val_size, test_size])
 
 # Transform our data subsets
-class TransformDataset(torch.utils.data.Dataset):
+class TransformedSubset(torch.utils.data.Dataset):
     def __init__(self, subset, transform):
         self.subset = subset
         self.transform = transform
@@ -77,3 +77,12 @@ class TransformDataset(torch.utils.data.Dataset):
     def __len__(self):
         return len(self.subset)
     
+# Apply transforms
+train_dataset = TransformedSubset(torch.utils.data.Subset(dataset, train_idx), train_transform)
+val_dataset = TransformedSubset(torch.utils.data.Subset(dataset, val_idx), val_test_transform)
+test_dataset = TransformedSubset(torch.utils.data.Subset(dataset, test_idx), val_test_transform)
+
+# Create data loaders
+train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
+test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
