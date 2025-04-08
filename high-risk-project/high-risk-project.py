@@ -99,8 +99,12 @@ class OurBrainReadingCNN(nn.Module):
         nn.ReLU(inplace=True),
         nn.MaxPool2d(kernel_size=2, stride=2),
         nn.Conv2d(64, 
-        )
+        ))
         
+
+        # Calculate spatial dimensions, five layers * stride of 2 = 2^5
+        self.output_spatial_dim = img_size // 32
+
     def forward(self, x):
         return self.layers(x)
 
@@ -141,31 +145,77 @@ class OurBrainReadingTransformerEncoderHead(nn.Module):
         nn.init.constant_(self.classify.bias, 0)
 
     def forward(self, x):
+        # Get batch size
         B = x.shape[0]
         
+        # Create CLS tokens for the batch
         cls_tokens = self.cls_token.expand(B, -1, -1)
-        input = torch.cat((cls_tokens, x), dim=1)
-        input = input + self.position_encoding
+
+        # Prepend CLS tokens
+        enc_input = torch.cat((cls_tokens, x), dim=1)
+        enc_input = enc_input + self.position_encoding
         
         # Pass through encoder
-        output = self.encoder(x)
+        enc_output = self.encoder(enc_input)
 
         # Get tokens, normalize, classify
-        output = x[:, 0]
-        output = self.normalize(x)
-        logits = self.classify(x)
+        enc_output = enc_output[:, 0]
+        normalized_output = self.normalize(enc_output)
+        logits = self.classify(normalized_output)
         
         return logits
-        
 
 # Define Hybrid
 
 class OurBrainReadingCNNTransformerHybrid(nn.Module):
-
+    def __init__(self, cnn_output_channels=cnn_output_channels, d_model=d_model,
+                 nhead=nhead, num_encoder_layers=num_encoder_layers,
+                 dim_feedforward=dim_feedforward, num_classes=1, dropout=dropout):
+        super().__init__()
         
+        # Extract important features using our custom CNN
+        self.cnn = OurBrainReadingCNN(cnn_output_channels=cnn_output_channels)
 
+        # Calculate the sequence length using our CNNs output spatial dims
+        cnn_out_dim = self.cnn.output_spatial_dim
+        self.sequence_length = cnn_out_dim * cnn_out_dim
+
+        # Connect our CNN to transformer
+        self.projection_input == nn.Conv2d(cnn_output_channels, d_model, kernel_size=1)
         
-            
+        # Transformer
+        self.our_transformer_head = OurBrainReadingTransformerEncoderHead(
+            sequence_length=self.sequence_length,
+            d_model=d_model,
+            nhead=nhead,
+            num_encoder_layers=num_encoder_layers,
+            dim_feedforward=dim_feedforward,
+            dropout=dropout,
+            num_classes=num_classes
+        )
+
+        # Init this layer weights
+        self._init_weights()
+
+    def _init_weights(self):
+        nn.init.xavier_uniform_(self.projection_input.weight)
+    
+    def forward(self, x):
+        # Extract features
+        cnn_features = self.cnn(x)
+        
+        # Project to Transformer
+        transformer_input = self.projection_input(cnn_features)
+        
+        # Flatten from spatial to sequence
+        transformer_input = transformer_input.flatten(2)
+        transformer_input = transformer_input.transpose(1, 2)
+
+        # Feed through our Tranformer head to classify
+        logits = self.our_transformer_head(transformer_input)
+        
+        return logits
+           
 # Define my model and drop it on GPU
-model = MyBrainReadingCNNTransformerHybrid().to(device)
+model = OurBrainReadingCNNTransformerHybrid().to(device)
 
