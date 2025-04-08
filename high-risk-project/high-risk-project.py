@@ -27,7 +27,7 @@ wd = 1e-5
 epochs = 25
 train_split = 0.7
 val_split = 0.15
-test_split = 0.15
+# test_split = 0.15
 
 # Image transformations
 normalize_mean = [0.5, 0.5, 0.5]
@@ -86,3 +86,86 @@ test_dataset = TransformedSubset(torch.utils.data.Subset(dataset, test_idx), val
 train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
 val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
 test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
+
+# Define CNN
+cnn_output_channels = 512
+
+class OurBrainReadingCNN(nn.Module):
+    def __init__(self, cnn_output_channels=cnn_output_channels):
+        super().__init__()
+        self.layers = nn.Sequential(
+        nn.Conv2d(3, 64, kernel_size=3, padding=1),
+        nn.BatchNorm2d(64),
+        nn.ReLU(inplace=True),
+        nn.MaxPool2d(kernel_size=2, stride=2),
+        nn.Conv2d(64, 
+        )
+        
+    def forward(self, x):
+        return self.layers(x)
+
+# Define Tranformer Encoder Head
+d_model = 512
+nhead = 8
+num_encoder_layers = 3
+dim_feedforward = 2048
+dropout = 0.1
+
+class OurBrainReadingTransformerEncoderHead(nn.Module):
+    def __init__(self, sequence_length, d_model, nhead, num_encoder_layers, dim_feedforward, dropout, num_classes):
+        super().__init__()
+        self.sequence_length = sequence_length
+        self.d_model = d_model
+        
+        # Create position encoding and CLS token (hence the +1)
+        self.position_encoding = nn.Parameter(torch.zeros(1, self.sequence_length + 1, d_model))
+        self.cls_token = nn.Parameter(torch.zeros(1, 1, d_model))
+
+        # Create encoder layer and then using it to create encoder stack
+        encoder_layer = nn.TransformerEncoderLayer(d_model=d_model, nhead=nhead, dim_feedforward=dim_feedforward, dropout=dropout, batch_first=True)
+        self.encoder = nn.TransformerEncoder(encoder_layer, num_layers=num_encoder_layers)
+
+        # Normalize
+        self.normalize = nn.LayerNorm(d_model)
+        
+        # Classify
+        self.classify = nn.Linear(d_model, num_classes)
+
+        # Init weights
+        self._init_weights()
+
+    def _init_weights(self):
+        nn.init.trunc_normal_(self.position_encoding, std=0.02)
+        nn.init.trunc_normal_(self.cls_token, std=0.02)
+        nn.init.xavier_uniform_(self.classify.weight)
+        nn.init.constant_(self.classify.bias, 0)
+
+    def forward(self, x):
+        B = x.shape[0]
+        
+        cls_tokens = self.cls_token.expand(B, -1, -1)
+        input = torch.cat((cls_tokens, x), dim=1)
+        input = input + self.position_encoding
+        
+        # Pass through encoder
+        output = self.encoder(x)
+
+        # Get tokens, normalize, classify
+        output = x[:, 0]
+        output = self.normalize(x)
+        logits = self.classify(x)
+        
+        return logits
+        
+
+# Define Hybrid
+
+class OurBrainReadingCNNTransformerHybrid(nn.Module):
+
+        
+
+        
+            
+# Define my model and drop it on GPU
+model = MyBrainReadingCNNTransformerHybrid().to(device)
+
