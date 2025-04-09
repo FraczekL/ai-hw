@@ -1,5 +1,6 @@
 import os
 import math
+import argparse
 import numpy as np
 import torch
 import torch.nn as nn
@@ -8,7 +9,11 @@ import torchvision.transforms as transform
 import torchvision.models as models
 import torchvision.datasets as datasets
 from torch.utils.data import DataLoader, random_split
+import torch.utils.tensorboard as tb
 from tqdm import tqdm
+from pathlib import Path
+from datetime import datetime
+from sklearn.metrics import precision_recall_fscore_support, accuracy_score
 import kagglehub
 
 # Set my device to cuda
@@ -20,7 +25,7 @@ path = kagglehub.dataset_download("navoneel/brain-mri-images-for-brain-tumor-det
 print("Path to dataset files:", path)
 
 # Set baseline parameters
-img_size = 630
+img_size = 224
 batch_size = 32
 lr = 1e-4
 wd = 1e-5
@@ -33,6 +38,8 @@ val_split = 0.15
 normalize_mean = [0.5, 0.5, 0.5]
 normalize_std = [0.5, 0.5, 0.5]
 
+# Set image transforms in order to get variety
+# and send to tensor
 train_transform = transform.Compose([
     transform.Resize((img_size, img_size)),
     transform.RandomHorizontalFlip(),
@@ -83,9 +90,9 @@ val_dataset = TransformedSubset(torch.utils.data.Subset(dataset, val_idx), val_t
 test_dataset = TransformedSubset(torch.utils.data.Subset(dataset, test_idx), val_test_transform)
 
 # Create data loaders
-train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
-val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
-test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
+train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=os.cpu_count() // 2, pin_memory=True)
+val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers=os.cpu_count() // 2, pin_memory=True)
+test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False, num_workers=os.cpu_count() // 2, pin_memory=True)
 
 # Define CNN
 cnn_output_channels = 512
@@ -94,13 +101,32 @@ class OurBrainReadingCNN(nn.Module):
     def __init__(self, cnn_output_channels=cnn_output_channels):
         super().__init__()
         self.layers = nn.Sequential(
+        # Downconvolution block 1
         nn.Conv2d(3, 64, kernel_size=3, padding=1),
         nn.BatchNorm2d(64),
         nn.ReLU(inplace=True),
         nn.MaxPool2d(kernel_size=2, stride=2),
-        nn.Conv2d(64, 
-        ))
-        
+        # Downconvolution block 2
+        nn.Conv2d(64, 128, kernel_size=3, stride=1, padding=1),
+        nn.BatchNorm2d(128),
+        nn.ReLU(inplace=True),
+        nn.MaxPool2d(kernel_size=2, stride=2),
+        # Downconvolution block 3
+        nn.Conv2d(128, 256, kernel_size=3, stride=1, padding=1),
+        nn.BatchNorm2d(256),
+        nn.ReLU(inplace=True),
+        nn.MaxPool2d(kernel_size=2, stride=2),
+        # Downconvolution block 4
+        nn.Conv2d(256, 512, kernel_size=3, stride=1, padding=1),
+        nn.BatchNorm2d(512),
+        nn.ReLU(inplace=True),
+        nn.MaxPool2d(kernel_size=2, stride=2),
+        # Downconvolution block 5
+        nn.Conv2d(512, cnn_output_channels, kernel_size=3, stride=1, padding=1),
+        nn.BatchNorm2d(cnn_output_channels),
+        nn.ReLU(inplace=True),
+        nn.MaxPool2d(kernel_size=2, stride=2)
+        )        
 
         # Calculate spatial dimensions, five layers * stride of 2 = 2^5
         self.output_spatial_dim = img_size // 32
@@ -181,7 +207,7 @@ class OurBrainReadingCNNTransformerHybrid(nn.Module):
         self.sequence_length = cnn_out_dim * cnn_out_dim
 
         # Connect our CNN to transformer
-        self.projection_input == nn.Conv2d(cnn_output_channels, d_model, kernel_size=1)
+        self.projection_input = nn.Conv2d(cnn_output_channels, d_model, kernel_size=1)
         
         # Transformer
         self.our_transformer_head = OurBrainReadingTransformerEncoderHead(
@@ -215,7 +241,115 @@ class OurBrainReadingCNNTransformerHybrid(nn.Module):
         logits = self.our_transformer_head(transformer_input)
         
         return logits
-           
-# Define my model and drop it on GPU
+
+# Set the seed for reproducibility
+seed = 42
+torch.manual_seed(seed)
+np.random.seed(seed)
+torch.cuda.manual_seed_all(seed)
+
+# Set the model and drop it on GPU
 model = OurBrainReadingCNNTransformerHybrid().to(device)
 
+# Set loss function, optimizer, logger
+loss_fn = nn.BCEWithLogitsLoss()
+optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=wd)
+
+# Set logging parameters
+exp_dir = "logs"
+model_name = "OurBrainReadingCNNTransformerHybrid"
+
+log_dir = Path(exp_dir) / f"{model_name}_{datetime.now().strftime('%m%d_%H%M%S')}"
+log_dir.mkdir(parents=True, exist_ok=True)
+logger = tb.SummaryWriter(log_dir)
+
+# Set other variables
+global_step = 0
+metrics = {"train_acc": [], "val_acc": []}
+
+# Training and eval loop
+for epoch in range(epochs):
+
+    # Clear metrics dictionary
+    for key in metrics:
+        metrics[key].clear()
+
+    # Enable training mode
+    model.train()
+    
+    # Load batches of file using DataLoader
+    for img, label in tqdm(train_loader, desc=f"Epoch {epoch+1}/{epochs} [Train]"):
+        img, label = img.to(device), label.to(device)
+        
+        # Retain original label for accuracy calculation
+        orig_label = label.clone()
+        
+
+        # BCEWithLogitsLoss requires a float
+        label = label.float().unsqueeze(1)
+
+        prediction = model(img)
+        loss_value = loss_fn(prediction, label)
+        
+        optimizer.zero_grad()
+        loss_value.backward()
+        optimizer.step()
+
+        # Log per batch
+        metrics["train_acc"].append(torch.sigmoid(prediction).round().squeeze(1).eq(orig_label).float().mean().item())
+        
+        global_step += 1
+
+    # Disable gradient computation and switch to evaluation mode
+    with torch.inference_mode():
+        model.eval()
+
+        for img, label in tqdm(val_loader, desc=f"Epoch {epoch+1}/{epochs} [Val]"):
+            img, label = img.to(device), label.to(device)
+
+            orig_label = label.clone()
+            
+            label = label.float().unsqueeze(1)
+
+            prediction = model(img)
+            
+            metrics["val_acc"].append(torch.sigmoid(prediction).round().squeeze(1).eq(orig_label).float().mean().item())
+
+    # Log average train and val accuracy to tensorboard
+    epoch_train_acc = torch.as_tensor(metrics["train_acc"]).mean().item()
+    epoch_val_acc = torch.as_tensor(metrics["val_acc"]).mean().item()
+    
+    logger.add_scalar("train_acc", epoch_train_acc, global_step=global_step)
+    logger.add_scalar("val_acc", epoch_val_acc, global_step=global_step)
+
+    # Print on first, last, every 10th epoch
+    if epoch == 0 or epoch == epochs - 1 or (epoch + 1) % 10 == 0:
+        print(
+            f"Epoch {epoch + 1:2d} / {epochs:2d}: "
+            f"train_acc={epoch_train_acc:.4f} "
+            f"val_acc={epoch_val_acc:.4f}"
+        )
+
+# Final testing of the model
+with torch.inference_mode():
+    model.eval()
+    test_acc = []
+    
+    for img, label in tqdm(test_loader, desc="Testing"):
+        img, label = img.to(device), label.to(device)
+
+        orig_label = label.clone()
+        
+        label = label.float().unsqueeze(1)
+
+        prediction = model(img)
+        
+        test_acc.append(torch.sigmoid(prediction).round().squeeze(1).eq(orig_label).float().mean().item())
+
+    mean_test_acc = torch.as_tensor(test_acc).mean().item()
+    print(f"Test accuracy: {mean_test_acc:.4f}")
+    
+
+# Save the model
+torch.save(model.state_dict(), f"{model_name}.pth")
+print(f"Final model saved to {model_name}.pth")
