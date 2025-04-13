@@ -16,6 +16,23 @@ from datetime import datetime
 from sklearn.metrics import precision_recall_fscore_support, accuracy_score
 import kagglehub
 
+class ResNetCNN(nn.Module):
+    def __init__(self, d_model):
+        super().__init__()
+        model = models.resnet18(pretrained=True)
+        self.feature_extractor = nn.Sequential(*list(model.children())[:-2])
+        self.projection = nn.Conv2d(512, d_model, kernel_size=1)
+        self._init_weights()
+
+    def _init_weights(self):
+        nn.init.xavier_uniform_(self.projection.weight)
+
+    def forward(self, x):
+        x = self.feature_extractor(x)
+        x = self.projection(x)
+        return x
+        
+
 # Set my device to cuda
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Using device: {device}")
@@ -246,6 +263,46 @@ class OurBrainReadingCNNTransformerHybrid(nn.Module):
         
         return logits
 
+# Define Hybrid with ResNet
+
+class OurBrainReadingCNNTransformerHybridWithResNet(nn.Module):
+    def __init__(self, d_model=d_model, nhead=nhead, num_encoder_layers=num_encoder_layers,
+                 dim_feedforward=dim_feedforward, num_classes=1, dropout=dropout):
+        super().__init__()
+        
+        # Extract important features using ResNet, then project
+        self.cnn = ResNetCNN(d_model=d_model)
+        
+        # Set spatial dims per ResNet documentation
+        self.sequence_length = 7 * 7
+    
+        # Transformer
+        self.our_transformer_head = OurBrainReadingTransformerEncoderHead(
+            sequence_length=self.sequence_length,
+            d_model=d_model,
+            nhead=nhead,
+            num_encoder_layers=num_encoder_layers,
+            dim_feedforward=dim_feedforward,
+            dropout=dropout,
+            num_classes=num_classes
+        )
+
+    def _init_weights(self):
+        nn.init.xavier_uniform_(self.projection_input.weight)
+    
+    def forward(self, x):
+        # Extract features
+        cnn_features = self.cnn(x)
+   
+        # Flatten from spatial to sequence
+        transformer_input = cnn_features.flatten(2)
+        transformer_input = transformer_input.transpose(1, 2)
+
+        # Feed through our Tranformer head to classify
+        logits = self.our_transformer_head(transformer_input)
+        
+        return logits
+
 # Set the seed for reproducibility
 seed = 42
 torch.manual_seed(seed)
@@ -253,7 +310,7 @@ np.random.seed(seed)
 torch.cuda.manual_seed_all(seed)
 
 # Set the model and drop it on GPU
-model = OurBrainReadingCNNTransformerHybrid().to(device)
+model = OurBrainReadingCNNTransformerHybridWithResNet().to(device)
 
 # Set loss function, optimizer, logger
 loss_fn = nn.BCEWithLogitsLoss()
