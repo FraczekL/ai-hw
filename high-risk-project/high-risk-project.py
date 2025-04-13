@@ -73,7 +73,8 @@ val_test_transform = transform.Compose([
 ])
 
 # Load the entire dataset and verify
-dataset = datasets.ImageFolder(path, transform=None)
+# dataset = datasets.ImageFolder(path, transform=None)
+dataset = datasets.ImageFolder(os.path.join(path, "brain_tumor_dataset"), transform=None)
 print(f"Dataset has {len(dataset)} images.")
 print(f"Dataset has {dataset.classes} classes.")
 
@@ -111,9 +112,9 @@ test_dataset = TransformedSubset(torch.utils.data.Subset(dataset, test_idx), val
 # val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers=os.cpu_count() // 2, pin_memory=True)
 # test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False, num_workers=os.cpu_count() // 2, pin_memory=True)
 
-train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=2, pin_memory=True)
-val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers=2, pin_memory=True)
-test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False, num_workers=2, pin_memory=True)
+train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=1, pin_memory=True)
+val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers=1, pin_memory=True)
+test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False, num_workers=1, pin_memory=True)
 
 # Define CNN
 cnn_output_channels = 512
